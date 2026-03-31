@@ -1,0 +1,146 @@
+USE [LMS_DB]
+GO
+/****** Object:  Table [dbo].[LeaveBalances]    Script Date: 3/31/2026 5:34:43 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE TABLE [dbo].[LeaveBalances](
+	[UserID] [int] NULL,
+	[Sick] [int] NULL,
+	[Casual] [int] NULL,
+	[Earned] [int] NULL
+) ON [PRIMARY]
+GO
+/****** Object:  Table [dbo].[LeaveRequests]    Script Date: 3/31/2026 5:34:43 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE TABLE [dbo].[LeaveRequests](
+	[RequestID] [int] IDENTITY(1,1) NOT NULL,
+	[UserID] [int] NULL,
+	[LeaveType] [varchar](20) NULL,
+	[StartDate] [date] NULL,
+	[EndDate] [date] NULL,
+	[Reason] [text] NULL,
+	[Status] [varchar](20) NULL,
+	[ManagerComment] [text] NULL,
+PRIMARY KEY CLUSTERED 
+(
+	[RequestID] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [PRIMARY]
+) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
+GO
+/****** Object:  Table [dbo].[Users]    Script Date: 3/31/2026 5:34:43 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE TABLE [dbo].[Users](
+	[UserID] [int] IDENTITY(1,1) NOT NULL,
+	[FullName] [varchar](100) NULL,
+	[Role] [varchar](20) NULL,
+PRIMARY KEY CLUSTERED 
+(
+	[UserID] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [PRIMARY]
+) ON [PRIMARY]
+GO
+INSERT [dbo].[LeaveBalances] ([UserID], [Sick], [Casual], [Earned]) VALUES (1, 32, 40, 20)
+GO
+SET IDENTITY_INSERT [dbo].[LeaveRequests] ON 
+GO
+INSERT [dbo].[LeaveRequests] ([RequestID], [UserID], [LeaveType], [StartDate], [EndDate], [Reason], [Status], [ManagerComment]) VALUES (1, 1, N'Sick', CAST(N'2026-04-01' AS Date), CAST(N'2026-03-11' AS Date), N'tst', N'Approved', N'Apprice')
+GO
+INSERT [dbo].[LeaveRequests] ([RequestID], [UserID], [LeaveType], [StartDate], [EndDate], [Reason], [Status], [ManagerComment]) VALUES (2, 1, N'Casual', CAST(N'2026-04-23' AS Date), CAST(N'2026-03-25' AS Date), N'Feelings Not Well', N'Approved', N'Okay will approve')
+GO
+INSERT [dbo].[LeaveRequests] ([RequestID], [UserID], [LeaveType], [StartDate], [EndDate], [Reason], [Status], [ManagerComment]) VALUES (3, 1, N'Earned', CAST(N'2026-04-02' AS Date), CAST(N'2026-04-15' AS Date), N'Test', N'Pending', NULL)
+GO
+SET IDENTITY_INSERT [dbo].[LeaveRequests] OFF
+GO
+SET IDENTITY_INSERT [dbo].[Users] ON 
+GO
+INSERT [dbo].[Users] ([UserID], [FullName], [Role]) VALUES (1, N'Rahul Employee', N'Employee')
+GO
+INSERT [dbo].[Users] ([UserID], [FullName], [Role]) VALUES (2, N'Amit Manager', N'Manager')
+GO
+SET IDENTITY_INSERT [dbo].[Users] OFF
+GO
+ALTER TABLE [dbo].[LeaveBalances] ADD  DEFAULT ((12)) FOR [Sick]
+GO
+ALTER TABLE [dbo].[LeaveBalances] ADD  DEFAULT ((12)) FOR [Casual]
+GO
+ALTER TABLE [dbo].[LeaveBalances] ADD  DEFAULT ((20)) FOR [Earned]
+GO
+ALTER TABLE [dbo].[LeaveRequests] ADD  DEFAULT ('Pending') FOR [Status]
+GO
+ALTER TABLE [dbo].[LeaveBalances]  WITH CHECK ADD FOREIGN KEY([UserID])
+REFERENCES [dbo].[Users] ([UserID])
+GO
+ALTER TABLE [dbo].[LeaveRequests]  WITH CHECK ADD FOREIGN KEY([UserID])
+REFERENCES [dbo].[Users] ([UserID])
+GO
+/****** Object:  StoredProcedure [dbo].[sp_ApplyLeave]    Script Date: 3/31/2026 5:34:44 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[sp_ApplyLeave]
+    @UserID INT, @LeaveType VARCHAR(20), @StartDate DATE, @EndDate DATE, @Reason TEXT
+AS
+BEGIN
+    DECLARE @Days INT = DATEDIFF(DAY, @StartDate, @EndDate) + 1;
+    DECLARE @Balance INT;
+
+    -- Validation 1: Backdated Check
+    IF @StartDate < CAST(GETDATE() AS DATE)
+    BEGIN
+        RAISERROR('Backdated leaves not allowed', 16, 1); RETURN;
+    END
+
+    -- Validation 2: Overlap Check
+    IF EXISTS (SELECT 1 FROM LeaveRequests WHERE UserID = @UserID AND Status != 'Rejected' 
+               AND (@StartDate <= EndDate AND @EndDate >= StartDate))
+    BEGIN
+        RAISERROR('Leave dates overlap with existing request', 16, 1); RETURN;
+    END
+
+    -- Validation 3: Balance Check
+    SELECT @Balance = CASE 
+        WHEN @LeaveType = 'Sick' THEN Sick 
+        WHEN @LeaveType = 'Casual' THEN Casual 
+        WHEN @LeaveType = 'Earned' THEN Earned END 
+    FROM LeaveBalances WHERE UserID = @UserID;
+
+    IF @Balance < @Days
+    BEGIN
+        RAISERROR('Insufficient balance', 16, 1); RETURN;
+    END
+
+    INSERT INTO LeaveRequests (UserID, LeaveType, StartDate, EndDate, Reason, Status)
+    VALUES (@UserID, @LeaveType, @StartDate, @EndDate, @Reason, 'Pending');
+END;
+GO
+/****** Object:  StoredProcedure [dbo].[sp_ApproveRejectLeave]    Script Date: 3/31/2026 5:34:44 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[sp_ApproveRejectLeave]
+    @RequestID INT, @Status VARCHAR(20), @Comment TEXT
+AS
+BEGIN
+    UPDATE LeaveRequests SET Status = @Status, ManagerComment = @Comment WHERE RequestID = @RequestID;
+    
+    IF @Status = 'Approved'
+    BEGIN
+        DECLARE @Days INT, @LType VARCHAR(20), @UID INT;
+        SELECT @Days = DATEDIFF(DAY, StartDate, EndDate)+1, @LType = LeaveType, @UID = UserID FROM LeaveRequests WHERE RequestID = @RequestID;
+        
+        IF @LType = 'Sick' UPDATE LeaveBalances SET Sick -= @Days WHERE UserID = @UID;
+        IF @LType = 'Casual' UPDATE LeaveBalances SET Casual -= @Days WHERE UserID = @UID;
+        IF @LType = 'Earned' UPDATE LeaveBalances SET Earned -= @Days WHERE UserID = @UID;
+    END
+END;
+GO
